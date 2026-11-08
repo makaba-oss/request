@@ -93,6 +93,44 @@ export async function saveStudent(_: FormState, fd: FormData): Promise<FormState
   return { ok: true, message: 'Сохранено' };
 }
 
+/** Определяет тип картинки по первым байтам, чтобы не доверять расширению файла. */
+function imageType(b: Buffer): string | null {
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (b.length > 12 && b.subarray(0, 4).toString() === 'RIFF' && b.subarray(8, 12).toString() === 'WEBP') return 'image/webp';
+  return null;
+}
+
+/** Отзывы: блоки через пустую строку; первая строка блока — имя, дальше — текст. */
+function parseReviews(raw: string) {
+  return raw.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean).slice(0, 12).map(b => {
+    const [first, ...rest] = b.split('\n');
+    return rest.length ? { name: first.trim().slice(0, 80), text: rest.join('\n').trim().slice(0, 1000) } : { name: '', text: first.trim().slice(0, 1000) };
+  });
+}
+
+export async function saveAbout(_: FormState, fd: FormData): Promise<FormState> {
+  const owner = await requireOwner();
+  const points = String(fd.get('aboutPoints') || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 8).map(s => s.slice(0, 80));
+  const reviews = parseReviews(String(fd.get('reviews') || ''));
+  await sql`
+    UPDATE workspaces SET about_title = ${clip(fd.get('aboutTitle'), 120)}, about_text = ${clip(fd.get('aboutText'), 3000)},
+      about_points = ${points}, reviews = ${sql.json(reviews)}
+    WHERE id = ${owner.workspaceId}`;
+  const file = fd.get('photo');
+  if (fd.get('removePhoto') === '1') {
+    await sql`UPDATE workspaces SET photo = NULL, photo_type = '', photo_at = now() WHERE id = ${owner.workspaceId}`;
+  } else if (file && typeof file === 'object' && 'arrayBuffer' in file && file.size > 0) {
+    if (file.size > 3 * 1024 * 1024) return { error: 'Фото больше 3 МБ. Уменьшите его и загрузите снова.' };
+    const buf = Buffer.from(await file.arrayBuffer());
+    const type = imageType(buf);
+    if (!type) return { error: 'Подходят только фото JPG, PNG или WebP.' };
+    await sql`UPDATE workspaces SET photo = ${buf}, photo_type = ${type}, photo_at = now() WHERE id = ${owner.workspaceId}`;
+  }
+  revalidatePath('/', 'layout');
+  return { ok: true, message: 'Сохранено — блок уже на главной' };
+}
+
 export async function saveSettings(_: FormState, fd: FormData): Promise<FormState> {
   const owner = await requireOwner();
   const goals = String(fd.get('goals') || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 20).map(s => s.slice(0, 60));

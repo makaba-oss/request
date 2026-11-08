@@ -1,7 +1,7 @@
 import { requireOwner } from '@/lib/auth';
 import { getWorkspace, goalsOf } from '@/lib/workspace';
 import { ActionForm } from '@/components/forms';
-import { saveSettings } from '../actions';
+import { saveSettings, saveAbout } from '../actions';
 
 export const metadata = { title: 'Настройки' };
 
@@ -9,8 +9,29 @@ export default async function SettingsPage() {
   const owner = await requireOwner();
   const ws = await getWorkspace(owner.workspaceId);
   if (!ws) return null;
+  const reviewsText = ws.reviews.map(r => (r.name ? r.name + '\n' : '') + r.text).join('\n\n');
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div className="stack" style={{ maxWidth: 720 }}>
+      <ActionForm action={saveAbout} submit="Сохранить блок «Обо мне»">
+        <section className="panel stack">
+          <div><h2>Обо мне — на главной странице</h2><p className="small muted" style={{ marginTop: 4 }}>Блок появится на главной, как только заполните текст или загрузите фото.</p></div>
+          <div className="row" style={{ alignItems: 'flex-start', gap: 16 }}>
+            {ws.hasPhoto
+              ? <img src={`/api/photo?v=${ws.photoAt ? new Date(ws.photoAt).getTime() : 0}`} alt="Ваше фото" width={96} height={96} style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 16 }} />
+              : <div className="empty small" style={{ width: 96, height: 96, padding: 8, display: 'grid', placeItems: 'center' }}>нет фото</div>}
+            <div className="stack" style={{ flex: 1, minWidth: 220, gap: 8 }}>
+              <label className="field"><span>Фото (JPG, PNG или WebP, до 3 МБ)</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+              {ws.hasPhoto ? <label className="row small muted" style={{ gap: 6 }}><input type="checkbox" name="removePhoto" value="1" />Убрать фото</label> : null}
+            </div>
+          </div>
+          <label className="field"><span>Заголовок</span><input name="aboutTitle" type="text" defaultValue={ws.aboutTitle} maxLength={120} placeholder="Например: Привет! Я Макар, преподаю японский" /></label>
+          <label className="field"><span>О себе</span><textarea name="aboutText" rows={5} defaultValue={ws.aboutText} maxLength={3000} placeholder="Как вы пришли к японскому, как строите занятия, кому подходите" /></label>
+          <label className="field"><span>Коротко о главном — по одному пункту на строку</span><textarea name="aboutPoints" rows={4} defaultValue={ws.aboutPoints.join('\n')} placeholder={'Преподаю с 2020 года\nСдал JLPT N2\nЗанятия по Minna no Nihongo и Genki'} /></label>
+          <label className="field"><span>Отзывы учеников — каждый отзыв через пустую строку, первая строка — имя</span>
+            <textarea name="reviews" rows={7} defaultValue={reviewsText} placeholder={'Анна\nЗа полгода с нуля дошли до N5, занятия всегда в радость.\n\nДмитрий\nПодготовил к поездке в Японию — понимал меню и вывески!'} />
+          </label>
+        </section>
+      </ActionForm>
       <ActionForm action={saveSettings} submit="Сохранить настройки">
         <section className="panel stack">
           <h2>Школа</h2>

@@ -49,6 +49,31 @@ export default async function Home() {
         </div>
       </section>
 
+      {ws && (ws.aboutText || ws.hasPhoto) ? (
+        <section className="lp-sec" id="about">
+          <h2>Обо мне</h2>
+          <div className="about">
+            {ws.hasPhoto ? <img className="about-photo" src={`/api/photo?v=${ws.photoAt ? new Date(ws.photoAt).getTime() : 0}`} alt={ws.teacher || 'Преподаватель'} /> : null}
+            <div className="stack" style={{ gap: 16 }}>
+              {ws.aboutTitle ? <h3 className="wm" style={{ fontSize: 'clamp(1.2rem, 2.4vw, 1.6rem)', lineHeight: 1.25 }}>{ws.aboutTitle}</h3> : null}
+              {ws.aboutText ? <p className="pre" style={{ fontSize: '1.05rem', lineHeight: 1.6 }}>{ws.aboutText}</p> : null}
+              {ws.aboutPoints.length ? <ul className="about-points">{ws.aboutPoints.map((p, i) => <li key={i}>{p}</li>)}</ul> : null}
+              <div><Link className="btn pri" href={enter}>Записаться на занятие</Link></div>
+            </div>
+          </div>
+          {ws.reviews.length ? (
+            <div className="reviews">
+              {ws.reviews.map((r, i) => (
+                <figure key={i} className="panel review">
+                  <blockquote className="pre">{r.text}</blockquote>
+                  {r.name ? <figcaption>{r.name}</figcaption> : null}
+                </figure>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <section className="lp-sec">
         <h2>Как это устроено</h2>
         <div className="lp-feat">

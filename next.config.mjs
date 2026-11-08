@@ -2,7 +2,7 @@
 const nextConfig = {
   output: 'standalone',
   poweredByHeader: false,
-  experimental: { serverActions: { bodySizeLimit: '2mb' } },
+  experimental: { serverActions: { bodySizeLimit: '4mb' } },
   async headers() {
     return [{
       source: '/(.*)',
