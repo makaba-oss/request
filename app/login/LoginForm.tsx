@@ -2,56 +2,40 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-export default function LoginForm() {
+export default function LoginForm({ contact }: { contact?: string }) {
   const router = useRouter();
-  const [step, setStep] = useState<'email' | 'code'>('email');
-  const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [agree, setAgree] = useState(false);
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  async function post(url: string, body: object) {
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
     setBusy(true); setErr('');
     try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, password }) });
       const j = await r.json().catch(() => ({ ok: false, error: 'Сервер не ответил. Попробуйте ещё раз.' }));
-      if (!j.ok) setErr(j.error || 'Что-то пошло не так. Попробуйте ещё раз.');
-      return !!j.ok;
+      if (j.ok) { router.replace('/app'); router.refresh(); return; }
+      setErr(j.error || 'Не получилось войти. Попробуйте ещё раз.');
     } catch {
       setErr('Нет связи с сервером. Проверьте интернет.');
-      return false;
-    } finally { setBusy(false); }
+    }
+    setBusy(false);
   }
 
-  if (step === 'email') {
-    return (
-      <form className="stack" onSubmit={async e => { e.preventDefault(); if (await post('/api/auth/request-code', { email })) setStep('code'); }}>
-        <label className="field"><span>Электронная почта</span>
-          <input id="email" type="email" required autoComplete="email" inputMode="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
-        </label>
-        <label className="row small muted" style={{ alignItems: 'flex-start', gap: 8 }}>
-          <input id="agree" type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} style={{ marginTop: 3 }} />
-          <span>Я согласен(на) на обработку персональных данных в соответствии с <a href="/privacy" target="_blank">политикой конфиденциальности</a></span>
-        </label>
-        {err ? <div className="alert err">{err}</div> : null}
-        <button className="btn pri" type="submit" disabled={busy || !agree}>{busy ? 'Отправляем…' : 'Получить код'}</button>
-        <p className="small muted">Пароль не нужен: пришлём на почту код из 6 цифр.</p>
-      </form>
-    );
-  }
   return (
-    <form className="stack" onSubmit={async e => { e.preventDefault(); if (await post('/api/auth/verify', { email, code })) { router.replace('/app'); router.refresh(); } }}>
-      <p>Код отправлен на <strong>{email}</strong>. Проверьте почту, в том числе папку «Спам».</p>
-      <label className="field"><span>Код из письма</span>
-        <input id="code" className="code-input" type="text" required autoFocus autoComplete="one-time-code" inputMode="numeric" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
+    <form className="stack" onSubmit={submit}>
+      <label className="field"><span>Логин</span>
+        <input id="login" name="username" type="text" required autoComplete="username" autoCapitalize="none" spellCheck={false} value={login} onChange={e => setLogin(e.target.value)} />
       </label>
-      {err ? <div className="alert err">{err}</div> : null}
-      <button className="btn pri" type="submit" disabled={busy || code.length !== 6}>{busy ? 'Проверяем…' : 'Войти'}</button>
-      <div className="row between small">
-        <button type="button" className="btn ghost sm" onClick={() => { setStep('email'); setCode(''); setErr(''); }}>Изменить почту</button>
-        <button type="button" className="btn ghost sm" disabled={busy} onClick={() => post('/api/auth/request-code', { email })}>Отправить код ещё раз</button>
-      </div>
+      <label className="field"><span>Пароль</span>
+        <input id="password" name="password" type={show ? 'text' : 'password'} required autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
+      </label>
+      <label className="row small muted" style={{ gap: 6 }}><input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)} />Показать пароль</label>
+      {err ? <div className="alert err" role="alert">{err}</div> : null}
+      <button className="btn pri" type="submit" disabled={busy}>{busy ? 'Входим…' : 'Войти'}</button>
+      <p className="small muted">Логин и пароль выдаёт преподаватель{contact ? <>. Забыли пароль? Напишите: <span style={{ userSelect: 'all' }}>{contact}</span></> : '. Если забыли пароль, напишите преподавателю.'}</p>
     </form>
   );
 }

@@ -10,8 +10,8 @@ export function Submit({ children, className = 'btn pri', pending: pendingText =
 }
 
 /** Форма с серверным действием: показывает ошибку или «Сохранено» под полями. */
-export function ActionForm({ action, children, className = 'stack', submit = 'Сохранить', pending }: {
-  action: (s: FormState, fd: FormData) => Promise<FormState>; children: React.ReactNode; className?: string; submit?: string; pending?: string;
+export function ActionForm({ action, children, className = 'stack', submit = 'Сохранить', pending, submitClass = 'btn pri' }: {
+  action: (s: FormState, fd: FormData) => Promise<FormState>; children: React.ReactNode; className?: string; submit?: string; pending?: string; submitClass?: string;
 }) {
   const [state, run] = useFormState(action, null);
   return (
@@ -19,7 +19,7 @@ export function ActionForm({ action, children, className = 'stack', submit = 'С
       {children}
       {state?.error ? <div className="alert err" role="alert">{state.error}</div> : null}
       {state?.ok && state.message ? <div className="alert ok" role="status">{state.message}</div> : null}
-      <div><Submit pending={pending}>{submit}</Submit></div>
+      <div><Submit pending={pending} className={submitClass}>{submit}</Submit></div>
     </form>
   );
 }

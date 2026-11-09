@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Header, LogoutButton } from '@/components/Brand';
 import { NavTabs } from '@/components/forms';
 import { requireUser } from '@/lib/auth';
@@ -17,7 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   return (
     <>
-      <Header sub={sub} right={<div className="row" style={{ gap: 8 }}><span className="small muted">{user.email}</span><LogoutButton /></div>} />
+      <Header sub={sub} right={<div className="row" style={{ gap: 4 }}><span className="small muted cred">{user.email}</span><Link href="/app/account" className="btn ghost sm">Пароль</Link><LogoutButton /></div>} />
       {user.role === 'owner' ? (
         <NavTabs items={[{ href: '/app', label: 'Ученики', count: pending }, { href: '/app/settings', label: 'Настройки и реквизиты' }]} />
       ) : null}

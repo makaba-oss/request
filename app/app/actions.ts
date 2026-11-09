@@ -2,9 +2,9 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { sql, newId } from '@/lib/db';
-import { requireOwner, requireUser, defaultWorkspaceId } from '@/lib/auth';
+import { requireOwner, requireUser, defaultWorkspaceId, dropOtherSessions } from '@/lib/auth';
 import { clip, safeUrl, getWorkspace, goalsOf, LEVELS, START_LEVELS } from '@/lib/workspace';
-import { sendMail } from '@/lib/mail';
+import { hashPassword, checkPassword, generatePassword, normalizeLogin } from '@/lib/password.mjs';
 
 export type FormState = { ok?: boolean; error?: string; message?: string } | null;
 
@@ -26,20 +26,71 @@ export async function registerStudent(_: FormState, fd: FormData): Promise<FormS
   const allowed = new Set(goalsOf(ws));
   const goals = fd.getAll('goal').map(g => String(g)).filter(g => allowed.has(g)).slice(0, 20);
   if (!goals.length) return { error: 'Выберите хотя бы одну цель.' };
+  if (fd.get('consent') !== '1') return { error: 'Подтвердите согласие на обработку персональных данных.' };
   const startLevel = START_LEVELS.includes(String(fd.get('startLevel'))) ? String(fd.get('startLevel')) : '';
   const format = fd.get('format') === 'sub' ? 'sub' : 'one';
+  const level = startLevel === 'Примерно N5' ? 'N5' : startLevel === 'Примерно N4' ? 'N4' : startLevel === 'N3 и выше' ? 'N3' : 'С нуля';
+  // Доступ выдал сам преподаватель, поэтому кабинет открывается сразу, без заявки.
   await sql`
-    INSERT INTO students (id, user_id, workspace_id, last_name, first_name, middle_name, contact, goals, start_level, format, about)
-    VALUES (${newId()}, ${user.id}, ${wsId}, ${lastName}, ${firstName}, ${clip(fd.get('middleName'), 60)}, ${clip(fd.get('contact'), 120)},
+    INSERT INTO students (id, user_id, workspace_id, status, accepted_at, level, last_name, first_name, middle_name, contact, goals, start_level, format, about)
+    VALUES (${newId()}, ${user.id}, ${wsId}, 'active', now(), ${level}, ${lastName}, ${firstName}, ${clip(fd.get('middleName'), 60)}, ${clip(fd.get('contact'), 120)},
             ${goals}, ${startLevel}, ${format}, ${clip(fd.get('about'), 1000)})
     ON CONFLICT (user_id) DO NOTHING`;
-  const owner = await sql<{ email: string }[]>`SELECT email FROM users WHERE workspace_id = ${wsId} AND role = 'owner' LIMIT 1`;
-  if (owner[0]) {
-    const url = (process.env.APP_URL || '') + '/app';
-    sendMail(owner[0].email, `Новая заявка: ${lastName} ${firstName}`, `${lastName} ${firstName} заполнил(а) анкету в ReQuest.\nЦели: ${goals.join(', ')}\n\nОткрыть кабинет: ${url}`).catch(console.error);
-  }
   revalidatePath('/app');
   return { ok: true };
+}
+
+/* ---------- доступы и пароли ---------- */
+
+export async function createAccount(_: FormState, fd: FormData): Promise<FormState> {
+  const owner = await requireOwner();
+  const login = normalizeLogin(fd.get('login'));
+  if (!login) return { error: 'Логин: латинские буквы, цифры и . _ - @, от 3 символов. Например: anna или anna.smirnova' };
+  const label = clip(fd.get('label'), 80);
+  const password = generatePassword();
+  const res = await sql`
+    INSERT INTO users (id, email, role, workspace_id, password_hash, label)
+    VALUES (${newId()}, ${login}, 'student', ${owner.workspaceId}, ${hashPassword(password)}, ${label})
+    ON CONFLICT (email) DO NOTHING`;
+  if (!res.count) return { error: `Логин «${login}» уже занят. Выберите другой.` };
+  revalidatePath('/app');
+  return { ok: true, message: `Доступ создан${label ? ' для ' + label : ''}. Отправьте ученику:\n\nСайт: ${siteUrl()}\nЛогин: ${login}\nПароль: ${password}\n\nПароль показывается один раз. Если потеряется — выдадите новый.` };
+}
+
+export async function resetPassword(_: FormState, fd: FormData): Promise<FormState> {
+  const owner = await requireOwner();
+  const id = String(fd.get('userId'));
+  const password = generatePassword();
+  const [u] = await sql<{ email: string }[]>`
+    UPDATE users SET password_hash = ${hashPassword(password)}, failed_logins = 0, locked_until = NULL
+    WHERE id = ${id} AND role = 'student' AND workspace_id = ${owner.workspaceId} RETURNING email`;
+  if (!u) return { error: 'Ученик не найден.' };
+  await sql`DELETE FROM sessions WHERE user_id = ${id}`;
+  return { ok: true, message: `Новый пароль. Отправьте ученику:\n\nСайт: ${siteUrl()}\nЛогин: ${u.email}\nПароль: ${password}\n\nСтарый пароль больше не работает.` };
+}
+
+export async function deleteAccount(fd: FormData) {
+  const owner = await requireOwner();
+  await sql`DELETE FROM users WHERE id = ${String(fd.get('userId'))} AND role = 'student' AND workspace_id = ${owner.workspaceId}
+            AND NOT EXISTS (SELECT 1 FROM students s WHERE s.user_id = users.id)`;
+  revalidatePath('/app');
+}
+
+export async function changeMyPassword(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const current = String(fd.get('current') || ''), next = String(fd.get('next') || ''), again = String(fd.get('again') || '');
+  const [u] = await sql<{ passwordHash: string | null }[]>`SELECT password_hash FROM users WHERE id = ${user.id}`;
+  if (!checkPassword(current, u?.passwordHash)) return { error: 'Текущий пароль неверный.' };
+  if (next.length < 8) return { error: 'Новый пароль — не короче 8 символов.' };
+  if (next.length > 200) return { error: 'Слишком длинный пароль.' };
+  if (next !== again) return { error: 'Пароли не совпадают.' };
+  await sql`UPDATE users SET password_hash = ${hashPassword(next)} WHERE id = ${user.id}`;
+  await dropOtherSessions(user.id);
+  return { ok: true, message: 'Пароль изменён. На других устройствах нужно будет войти заново.' };
+}
+
+function siteUrl() {
+  return (process.env.APP_URL || '').replace(/\/$/, '') || 'адрес сайта';
 }
 
 /* ---------- репетитор ---------- */
@@ -47,12 +98,10 @@ export async function registerStudent(_: FormState, fd: FormData): Promise<FormS
 export async function acceptStudent(fd: FormData) {
   const owner = await requireOwner();
   const id = String(fd.get('id'));
-  const [s] = await sql<{ email: string; firstName: string }[]>`
+  await sql`
     UPDATE students SET status = 'active', accepted_at = now(),
       level = CASE start_level WHEN 'Примерно N5' THEN 'N5' WHEN 'Примерно N4' THEN 'N4' WHEN 'N3 и выше' THEN 'N3' ELSE 'С нуля' END
-    FROM users u WHERE students.id = ${id} AND students.workspace_id = ${owner.workspaceId} AND u.id = students.user_id
-    RETURNING u.email, students.first_name`;
-  if (s) sendMail(s.email, 'Ваш кабинет в ReQuest открыт', `${s.firstName}, преподаватель принял вашу заявку. Кабинет: ${(process.env.APP_URL || '')}/app`).catch(console.error);
+    WHERE id = ${id} AND workspace_id = ${owner.workspaceId}`;
   revalidatePath('/app');
 }
 

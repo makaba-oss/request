@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth';
-import { listStudents, studentByUser } from '@/lib/students';
+import { listStudents, studentByUser, listWaitingAccounts } from '@/lib/students';
 import { getWorkspace, goalsOf, fio, FORMATS, START_LEVELS } from '@/lib/workspace';
 import { ActionForm, Submit } from '@/components/forms';
-import { registerStudent, acceptStudent, rejectStudent, setArchived } from './actions';
+import { registerStudent, acceptStudent, rejectStudent, setArchived, createAccount, resetPassword, deleteAccount } from './actions';
 
 export const metadata = { title: 'Кабинет' };
 
@@ -20,7 +20,7 @@ export default async function AppHome() {
     return (
       <div className="panel stack" style={{ maxWidth: 600 }}>
         <h2>Заявка отправлена</h2>
-        <p>{me.firstName}, преподаватель посмотрит вашу анкету и откроет кабинет. Мы пришлём письмо на почту.</p>
+        <p>{me.firstName}, преподаватель посмотрит вашу анкету и откроет кабинет. Загляните сюда чуть позже.</p>
         {ws?.contact ? <p className="small muted">Связь с преподавателем: <span style={{ userSelect: 'all' }}>{ws.contact}</span></p> : null}
       </div>
     );
@@ -55,7 +55,7 @@ function RegisterForm({ goals }: { goals: string[] }) {
       <ActionForm action={registerStudent} submit="Отправить анкету" pending="Отправляем…">
         <div>
           <h2 style={{ fontSize: '1.4rem' }}>Регистрация</h2>
-          <p className="muted" style={{ marginTop: 6 }}>Заполните анкету — преподаватель посмотрит её и откроет ваш кабинет.</p>
+          <p className="muted" style={{ marginTop: 6 }}>Заполните анкету один раз — после этого откроется ваш кабинет.</p>
         </div>
         <div className="fgrid">
           <label className="field"><span>Фамилия</span><input name="lastName" type="text" required maxLength={60} autoComplete="family-name" /></label>
@@ -78,18 +78,47 @@ function RegisterForm({ goals }: { goals: string[] }) {
           ))}</div>
         </fieldset>
         <label className="field"><span>Расскажите о себе (необязательно)</span><textarea name="about" rows={3} maxLength={1000} placeholder="Что уже изучали, когда удобно заниматься" /></label>
+        <label className="row small" style={{ alignItems: 'flex-start', gap: 8 }}>
+          <input type="checkbox" name="consent" value="1" required style={{ marginTop: 3 }} />
+          <span>Я согласен(на) на обработку персональных данных в соответствии с <a href="/privacy" target="_blank">политикой конфиденциальности</a></span>
+        </label>
       </ActionForm>
     </div>
   );
 }
 
 async function OwnerHome({ workspaceId }: { workspaceId: string }) {
-  const all = await listStudents(workspaceId);
+  const [all, waiting] = await Promise.all([listStudents(workspaceId), listWaitingAccounts(workspaceId)]);
   const pending = all.filter(s => s.status === 'pending');
   const active = all.filter(s => s.status === 'active');
   const archived = all.filter(s => s.status === 'archived');
   return (
     <div className="stack">
+      <section className="panel stack">
+        <div><h2>Добавить ученика</h2><p className="small muted" style={{ marginTop: 4 }}>Сайт придумает пароль. Отправьте ученику логин и пароль — при первом входе он заполнит анкету.</p></div>
+        <ActionForm action={createAccount} submit="Создать доступ" pending="Создаём…">
+          <div className="fgrid">
+            <label className="field"><span>Логин (латиницей)</span><input name="login" type="text" required autoCapitalize="none" spellCheck={false} placeholder="anna.smirnova" /></label>
+            <label className="field"><span>Кто это (видите только вы)</span><input name="label" type="text" maxLength={80} placeholder="Анна, сестра Димы" /></label>
+          </div>
+        </ActionForm>
+      </section>
+
+      {waiting.length ? (
+        <section className="panel stack">
+          <div className="row between"><h2>Ждут первого входа</h2><span className="small muted">Доступ выдан, анкета ещё не заполнена</span></div>
+          {waiting.map(w => (
+            <div key={w.id} className="stack" style={{ borderTop: '1px solid var(--line)', paddingTop: 12, gap: 8 }}>
+              <div className="row between">
+                <div><strong className="cred">{w.email}</strong>{w.label ? <span className="muted"> · {w.label}</span> : null}<div className="small muted">создан {fmtDate(w.createdAt)}{w.lastLoginAt ? ' · уже заходил(а)' : ' · ещё не заходил(а)'}</div></div>
+                <form action={deleteAccount}><input type="hidden" name="userId" value={w.id} /><Submit className="btn ghost sm danger" pending="…">Удалить доступ</Submit></form>
+              </div>
+              <ActionForm action={resetPassword} submit="Выдать новый пароль" pending="…" submitClass="btn sm" className="stack"><input type="hidden" name="userId" value={w.id} /></ActionForm>
+            </div>
+          ))}
+        </section>
+      ) : null}
+
       {pending.length ? (
         <section className="panel stack">
           <div className="row between"><h2>Заявки</h2><span className="small muted">Заполнили регистрацию и ждут вашего решения</span></div>
@@ -130,7 +159,7 @@ async function OwnerHome({ workspaceId }: { workspaceId: string }) {
           </table></div>
         </section>
       ) : pending.length ? null : (
-        <div className="empty"><strong>Пока нет учеников</strong>Отправьте ученикам ссылку на сайт — после регистрации они появятся в «Заявках».</div>
+        <div className="empty"><strong>Пока нет учеников</strong>Создайте доступ выше. Когда ученик войдёт и заполнит анкету, он появится здесь.</div>
       )}
 
       {archived.length ? (

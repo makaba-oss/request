@@ -34,3 +34,12 @@ export async function getStudent(workspaceId: string, id: string): Promise<Stude
     WHERE s.workspace_id = ${workspaceId} AND s.id = ${id}`;
   return s ?? null;
 }
+
+/** Доступы, которые выдал преподаватель, но ученик ещё не заполнил анкету. */
+export async function listWaitingAccounts(workspaceId: string) {
+  return sql<{ id: string; email: string; label: string; createdAt: Date; lastLoginAt: Date | null }[]>`
+    SELECT u.id, u.email, u.label, u.created_at, u.last_login_at FROM users u
+    WHERE u.workspace_id = ${workspaceId} AND u.role = 'student'
+      AND NOT EXISTS (SELECT 1 FROM students s WHERE s.user_id = u.id)
+    ORDER BY u.created_at DESC`;
+}

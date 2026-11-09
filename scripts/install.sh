@@ -36,10 +36,9 @@ cd "$DIR"
 if [ ! -f .env ]; then
   say "Настройки сайта"
   DOMAIN=$(ask "Домен сайта, без https:// (например request-edu.ru)")
-  OWNER_EMAIL=$(ask "Ваша почта — с неё вы будете входить как преподаватель")
-  echo "Почта для кодов входа (SMTP). Можно пропустить: тогда коды будут видны в журнале сервера."
-  SMTP_URL=$(ask "SMTP_URL (Enter — пропустить)" "")
-  MAIL_FROM=$(ask "Имя и адрес отправителя" "ReQuest <no-reply@$DOMAIN>")
+  OWNER_EMAIL=$(ask "Ваш логин для входа (латиницей, например makar)")
+  SMTP_URL=""
+  MAIL_FROM="ReQuest <no-reply@$DOMAIN>"
   cat > .env <<EOF
 DOMAIN=$DOMAIN
 APP_URL=https://$DOMAIN
@@ -55,6 +54,9 @@ fi
 say "Собираем и запускаем (первый раз — несколько минут)"
 docker compose up -d --build
 
+say "Пароль преподавателя"
+for i in 1 2 3 4 5 6 7 8 9 10; do docker compose exec -T app node scripts/set-password.mjs && break || sleep 3; done
+
 DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2)
 IP=$(curl -fsS https://ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')
 say "Готово"
@@ -68,5 +70,6 @@ cat <<EOF
 Полезные команды (из папки $DIR):
   обновить сайт:      git pull && docker compose up -d --build
   журнал сайта:       docker compose logs -f app
+  новый пароль себе:  docker compose exec app node scripts/set-password.mjs
   копии базы:         ls backups/
 EOF

@@ -4,7 +4,7 @@ import { requireOwner } from '@/lib/auth';
 import { getStudent } from '@/lib/students';
 import { getWorkspace, goalsOf, fio, FORMATS, LEVELS } from '@/lib/workspace';
 import { ActionForm, Submit } from '@/components/forms';
-import { saveStudent, setArchived } from '../../actions';
+import { saveStudent, setArchived, resetPassword } from '../../actions';
 
 export const metadata = { title: 'Ученик' };
 
@@ -21,6 +21,11 @@ export default async function StudentPage({ params }: { params: { id: string } }
           <form action={setArchived}><input type="hidden" name="id" value={s.id} /><input type="hidden" name="archived" value="1" /><Submit className="btn ghost sm danger" pending="…">Убрать в архив</Submit></form>
         ) : <span className="chip c-mute">в архиве</span>}
       </div>
+
+      <section className="panel stack">
+        <div className="row between"><h3>Доступ</h3><span className="small muted">Логин: <strong className="cred" style={{ color: 'var(--ink)' }}>{s.email}</strong></span></div>
+        <ActionForm action={resetPassword} submit="Выдать новый пароль" pending="…" submitClass="btn sm"><input type="hidden" name="userId" value={s.userId} /><p className="small muted">Старый пароль перестанет работать, ученика выкинет из кабинета на всех устройствах.</p></ActionForm>
+      </section>
 
       <ActionForm action={saveStudent} submit="Сохранить">
         <input type="hidden" name="id" value={s.id} />

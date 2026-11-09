@@ -20,6 +20,7 @@ COPY --from=build --chown=app:app /srv/request/.next/static ./.next/static
 COPY --from=build --chown=app:app /srv/request/public ./public
 COPY --from=build --chown=app:app /srv/request/db ./db
 COPY --from=build --chown=app:app /srv/request/scripts ./scripts
+COPY --from=build --chown=app:app /srv/request/lib/password.mjs ./lib/password.mjs
 COPY --from=deps --chown=app:app /srv/request/node_modules/postgres ./node_modules/postgres
 USER app
 EXPOSE 3000
