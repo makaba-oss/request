@@ -3,6 +3,10 @@ import { requireUser } from '@/lib/auth';
 import { listStudents, studentByUser, listWaitingAccounts } from '@/lib/students';
 import { getWorkspace, goalsOf, fio, FORMATS, START_LEVELS } from '@/lib/workspace';
 import { ActionForm, Submit } from '@/components/forms';
+import { CallButton } from '@/components/CallBlock';
+import { studentLessons, balanceOf, balances, upcoming, callInfo } from '@/lib/schedule';
+import { fmtDay, rub, plural, todayMsk } from '@/lib/dates';
+import { sql } from '@/lib/db';
 import { registerStudent, acceptStudent, rejectStudent, setArchived, createAccount, resetPassword, deleteAccount } from './actions';
 
 export const metadata = { title: 'Кабинет' };
@@ -28,6 +32,14 @@ export default async function AppHome() {
   if (me.status === 'archived') {
     return <div className="empty"><strong>Кабинет сейчас закрыт</strong>Чтобы продолжить занятия, напишите преподавателю{ws?.contact ? `: ${ws.contact}` : ''}.</div>;
   }
+  return <StudentHome me={me} ws={ws} />;
+}
+
+async function StudentHome({ me, ws }: { me: NonNullable<Awaited<ReturnType<typeof studentByUser>>>; ws: Awaited<ReturnType<typeof getWorkspace>> }) {
+  const [lessons, bal] = await Promise.all([studentLessons(me.id), balanceOf(me.id)]);
+  const next = upcoming(lessons);
+  const n = next[0];
+  const call = n ? callInfo(ws, me, n) : null;
   return (
     <div className="stack">
       <div>
@@ -39,12 +51,22 @@ export default async function AppHome() {
           {me.book ? <span className="small muted">{me.book}</span> : null}
         </div>
       </div>
+      {n ? (
+        <div className="call">
+          <div className="label" style={{ color: 'inherit', opacity: .8 }}>Ближайшее занятие</div>
+          <div className="big">{fmtDay(n.day)}, {n.time}</div>
+          <div className="muted">{n.dur} мин{n.topic ? ' · ' + n.topic : ''}</div>
+          <div className="row"><CallButton info={call} /><Link href="/app/lessons" className="btn ghost sm" style={{ color: 'inherit' }}>Все занятия</Link></div>
+        </div>
+      ) : (
+        <div className="empty"><strong>Занятий пока нет в расписании</strong>{me.format === 'one' ? <Link href="/app/lessons">Выбрать свободное время →</Link> : 'Преподаватель скоро составит расписание.'}</div>
+      )}
       {me.message ? <div className="note"><div className="label" style={{ marginBottom: 4 }}>От преподавателя</div><p className="pre">{me.message}</p></div> : null}
       <div className="grid">
-        <div className="panel"><div className="label">Стоимость</div><div className="big" style={{ marginTop: 4 }}>{me.price ? me.price.toLocaleString('ru-RU') + ' ₽' : '—'}</div><div className="small muted">{me.price ? `за ${me.priceLessons} ${me.priceLessons === 1 ? 'занятие' : 'занятий'}${me.priceNote ? ' · ' + me.priceNote : ''}` : 'преподаватель ещё не указал'}</div></div>
-        <div className="panel"><div className="label">Расписание</div><p className="muted" style={{ marginTop: 6 }}>Календарь занятий появится на следующем этапе.</p></div>
+        <div className="panel"><div className="label">Оплачено занятий</div><div className="big" style={{ marginTop: 4, color: bal.left < 0 ? 'var(--danger)' : undefined }}>{bal.left}</div><div className="small muted">{bal.left < 0 ? 'нужно доплатить' : bal.left === 0 ? 'пора оплатить следующие' : 'осталось'} · <Link href="/app/pay">оплата</Link></div></div>
+        <div className="panel"><div className="label">Стоимость</div><div className="big" style={{ marginTop: 4 }}>{me.price ? rub(me.price) : '—'}</div><div className="small muted">{me.price ? `за ${me.priceLessons} ${plural(me.priceLessons, 'занятие', 'занятия', 'занятий')}${me.priceNote ? ' · ' + me.priceNote : ''}` : 'преподаватель ещё не указал'}</div></div>
+        <div className="panel"><div className="label">Впереди</div><div className="big" style={{ marginTop: 4 }}>{next.length}</div><div className="small muted">{plural(next.length, 'занятие', 'занятия', 'занятий')} в расписании</div></div>
       </div>
-      {ws?.requisites ? <div className="panel stack"><h3>Реквизиты для оплаты</h3><p className="pre" style={{ background: 'var(--sunk)', borderRadius: 8, padding: '12px 14px' }}>{ws.requisites}</p></div> : null}
     </div>
   );
 }
@@ -88,7 +110,10 @@ function RegisterForm({ goals }: { goals: string[] }) {
 }
 
 async function OwnerHome({ workspaceId }: { workspaceId: string }) {
-  const [all, waiting] = await Promise.all([listStudents(workspaceId), listWaitingAccounts(workspaceId)]);
+  const [all, waiting, bal, nexts] = await Promise.all([listStudents(workspaceId), listWaitingAccounts(workspaceId), balances(workspaceId),
+    sql<{ studentId: string; day: Date; time: string }[]>`SELECT DISTINCT ON (student_id) student_id, day, time FROM lessons
+      WHERE workspace_id = ${workspaceId} AND status = 'plan' AND day >= ${todayMsk()} ORDER BY student_id, day, time`]);
+  const nextOf = Object.fromEntries(nexts.map(n => [n.studentId, n]));
   const pending = all.filter(s => s.status === 'pending');
   const active = all.filter(s => s.status === 'active');
   const archived = all.filter(s => s.status === 'archived');
@@ -146,14 +171,15 @@ async function OwnerHome({ workspaceId }: { workspaceId: string }) {
         <section className="panel stack">
           <h2>Ученики <span className="muted num" style={{ fontWeight: 500 }}>{active.length}</span></h2>
           <div className="tbl-wrap"><table>
-            <thead><tr><th>Ученик</th><th>Формат</th><th>Уровень</th><th>Цена</th><th>Связь</th></tr></thead>
+            <thead><tr><th>Ученик</th><th>Формат</th><th>Уровень</th><th>Следующий урок</th><th>Баланс</th><th>Цена</th></tr></thead>
             <tbody>{active.map(s => (
               <tr key={s.id}>
                 <td><Link href={`/app/students/${s.id}`}>{fio(s)}</Link></td>
                 <td><span className={'chip ' + (s.format === 'sub' ? 'c-ai' : 'c-mute')}>{s.format === 'sub' ? 'абонемент' : 'разовые'}</span></td>
                 <td>{s.level || '—'}</td>
+                <td className="num small">{nextOf[s.id] ? `${fmtDay(nextOf[s.id].day)}, ${nextOf[s.id].time}` : <span className="muted">—</span>}</td>
+                <td className="num">{bal[s.id] ? <span className={'chip ' + (bal[s.id].left < 0 ? 'c-bad' : bal[s.id].left === 0 ? 'c-warn' : 'c-good')}>{bal[s.id].left}</span> : '—'}</td>
                 <td className="num">{s.price ? s.price.toLocaleString('ru-RU') + ' ₽' : <span className="muted">не задана</span>}</td>
-                <td className="small muted">{s.contact || '—'}</td>
               </tr>
             ))}</tbody>
           </table></div>

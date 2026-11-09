@@ -5,14 +5,21 @@ import { getStudent } from '@/lib/students';
 import { getWorkspace, goalsOf, fio, FORMATS, LEVELS } from '@/lib/workspace';
 import { ActionForm, Submit } from '@/components/forms';
 import { saveStudent, setArchived, resetPassword } from '../../actions';
+import { sql } from '@/lib/db';
+import { studentLessons, upcoming, balanceOf, LESSON_STATUS } from '@/lib/schedule';
+import { fmtDay, fmtWhen, timeEnd, todayMsk, rub, plural } from '@/lib/dates';
+import { addLessons, addPayment, deletePayment, setLessonStatus, decidePayNotice } from '../../schedule-actions';
+
+const TABS = [['profile', 'Профиль'], ['lessons', 'Занятия и оплаты']] as const;
 
 export const metadata = { title: 'Ученик' };
 
-export default async function StudentPage({ params }: { params: { id: string } }) {
+export default async function StudentPage({ params, searchParams }: { params: { id: string }; searchParams: { tab?: string } }) {
   const owner = await requireOwner();
   const [s, ws] = await Promise.all([getStudent(owner.workspaceId, params.id), getWorkspace(owner.workspaceId)]);
   if (!s || s.status === 'pending') notFound();
   const goals = [...goalsOf(ws), ...s.goals.filter(g => !goalsOf(ws).includes(g))];
+  const tab = TABS.some(([k]) => k === searchParams.tab) ? searchParams.tab : 'profile';
   return (
     <div className="stack">
       <div className="row between">
@@ -22,6 +29,11 @@ export default async function StudentPage({ params }: { params: { id: string } }
         ) : <span className="chip c-mute">в архиве</span>}
       </div>
 
+      <nav className="tabs" aria-label="Разделы ученика" style={{ marginBottom: 0 }}>
+        {TABS.map(([k, l]) => <Link key={k} href={`/app/students/${s.id}?tab=${k}`} className="tab" aria-current={tab === k ? 'page' : undefined}>{l}</Link>)}
+      </nav>
+
+      {tab === 'lessons' ? <LessonsTab studentId={s.id} price={s.price} priceLessons={s.priceLessons} active={s.status === 'active'} /> : <>
       <section className="panel stack">
         <div className="row between"><h3>Доступ</h3><span className="small muted">Логин: <strong className="cred" style={{ color: 'var(--ink)' }}>{s.email}</strong></span></div>
         <ActionForm action={resetPassword} submit="Выдать новый пароль" pending="…" submitClass="btn sm"><input type="hidden" name="userId" value={s.userId} /><p className="small muted">Старый пароль перестанет работать, ученика выкинет из кабинета на всех устройствах.</p></ActionForm>
@@ -78,6 +90,99 @@ export default async function StudentPage({ params }: { params: { id: string } }
           <label className="field"><span>Видите только вы</span><textarea name="privateNote" rows={3} defaultValue={s.privateNote} /></label>
         </section>
       </ActionForm>
+      </>}
+    </div>
+  );
+}
+
+async function LessonsTab({ studentId, price, priceLessons, active }: { studentId: string; price: number; priceLessons: number; active: boolean }) {
+  const [lessons, bal, pays, notices] = await Promise.all([
+    studentLessons(studentId), balanceOf(studentId),
+    sql<{ id: string; day: Date; lessons: number; amount: number; note: string }[]>`SELECT id, day, lessons, amount, note FROM payments WHERE student_id = ${studentId} ORDER BY day DESC, created_at DESC LIMIT 100`,
+    sql<{ id: string; amount: number; comment: string; createdAt: Date }[]>`SELECT id, amount, comment, created_at FROM pay_notices WHERE student_id = ${studentId} AND status = 'pending' ORDER BY created_at`,
+  ]);
+  const next = upcoming(lessons);
+  const past = lessons.filter(l => !next.includes(l));
+  return (
+    <div className="stack">
+      <div className="grid">
+        <div className="panel"><div className="label">Баланс</div><div className="big" style={{ marginTop: 4, color: bal.left < 0 ? 'var(--danger)' : undefined }}>{bal.left}</div><div className="small muted">оплачено {bal.paid} · списано {bal.used}</div></div>
+        <div className="panel"><div className="label">Впереди</div><div className="big" style={{ marginTop: 4 }}>{next.length}</div><div className="small muted">{next[0] ? `ближайшее ${fmtDay(next[0].day)}, ${next[0].time}` : 'занятий нет'}</div></div>
+      </div>
+
+      {notices.map(n => (
+        <div key={n.id} className="panel item attn">
+          <div>Ученик сообщает об оплате <b>{rub(n.amount)}</b> · <span className="small muted">{fmtWhen(n.createdAt)}</span>{n.comment ? <div className="small muted pre">{n.comment}</div> : null}</div>
+          <form action={decidePayNotice} className="row" style={{ gap: 6 }}>
+            <input type="hidden" name="id" value={n.id} />
+            <label className="row small" style={{ gap: 6 }}>зачесть <input className="mini" type="number" name="lessons" min={0} max={200} defaultValue={price ? Math.max(1, Math.round((n.amount / price) * priceLessons)) : 1} /> зан.</label>
+            <button className="btn pri sm" name="decision" value="ok">Деньги пришли</button>
+            <button className="btn ghost sm danger" name="decision" value="no">Не нашёл</button>
+          </form>
+        </div>
+      ))}
+
+      {active ? (
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', alignItems: 'start' }}>
+          <section className="panel stack">
+            <h3>Поставить урок</h3>
+            <ActionForm action={addLessons} submit="Добавить" pending="Добавляем…">
+              <input type="hidden" name="studentId" value={studentId} />
+              <div className="fgrid">
+                <label className="field"><span>Дата</span><input type="date" name="day" defaultValue={todayMsk()} required /></label>
+                <label className="field"><span>Время</span><input type="time" name="time" defaultValue="18:00" required /></label>
+                <label className="field"><span>Минут</span><select name="dur" defaultValue="60">{[30, 45, 60, 90, 120].map(d => <option key={d}>{d}</option>)}</select></label>
+              </div>
+              <label className="field"><span>Повторять каждую неделю</span><select name="repeat" defaultValue="1">
+                <option value="1">Не повторять</option>{[4, 8, 12, 16, 26].map(n => <option key={n} value={n}>{n} {plural(n, 'неделю', 'недели', 'недель')}</option>)}
+              </select></label>
+            </ActionForm>
+          </section>
+          <section className="panel stack">
+            <h3>Записать оплату</h3>
+            <ActionForm action={addPayment} submit="Записать" pending="…">
+              <input type="hidden" name="studentId" value={studentId} />
+              <div className="fgrid">
+                <label className="field"><span>Сумма, ₽</span><input type="number" name="amount" min={0} defaultValue={price || ''} /></label>
+                <label className="field"><span>Занятий</span><input type="number" name="lessons" min={1} max={200} defaultValue={priceLessons || 1} required /></label>
+                <label className="field"><span>Дата</span><input type="date" name="day" defaultValue={todayMsk()} /></label>
+              </div>
+              <label className="field"><span>Комментарий</span><input type="text" name="note" maxLength={200} /></label>
+            </ActionForm>
+          </section>
+        </div>
+      ) : null}
+
+      <section className="panel stack">
+        <h3>Занятия</h3>
+        {lessons.length ? <div className="tbl-wrap"><table>
+          <thead><tr><th>Когда</th><th>Тема</th><th>Статус</th><th></th></tr></thead>
+          <tbody>{[...next, ...past].map(l => (
+            <tr key={l.id}>
+              <td className="num"><Link href={`/app/calendar?week=${l.day instanceof Date ? l.day.toISOString().slice(0, 10) : l.day}&ev=${l.id}`}>{fmtDay(l.day)}, {l.time}–{timeEnd(l.time, l.dur)}</Link></td>
+              <td className="small">{l.topic || <span className="muted">—</span>}</td>
+              <td><span className={'chip ' + LESSON_STATUS[l.status][1]}>{LESSON_STATUS[l.status][0]}</span></td>
+              <td>{l.status === 'plan' && !next.includes(l) ? (
+                <form action={setLessonStatus} className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                  <input type="hidden" name="id" value={l.id} />
+                  <button className="btn sm" name="status" value="done">Проведён</button>
+                  <button className="btn ghost sm" name="status" value="noshow">Пропуск</button>
+                </form>) : null}</td>
+            </tr>
+          ))}</tbody>
+        </table></div> : <p className="muted">Занятий ещё не было.</p>}
+      </section>
+
+      <section className="panel stack">
+        <h3>Оплаты</h3>
+        {pays.length ? <div className="tbl-wrap"><table>
+          <thead><tr><th>Дата</th><th>Сумма</th><th>Занятий</th><th>Комментарий</th><th></th></tr></thead>
+          <tbody>{pays.map(p => (
+            <tr key={p.id}><td className="num">{fmtDay(p.day, false)}</td><td className="num">{p.amount ? rub(p.amount) : '—'}</td><td className="num">+{p.lessons}</td><td className="small muted">{p.note}</td>
+              <td><form action={deletePayment}><input type="hidden" name="id" value={p.id} /><Submit className="btn ghost sm danger" pending="…">Удалить</Submit></form></td></tr>
+          ))}</tbody>
+        </table></div> : <p className="muted">Оплат пока нет.</p>}
+      </section>
     </div>
   );
 }
