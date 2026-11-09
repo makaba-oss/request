@@ -36,7 +36,11 @@ export default async function AppHome() {
 }
 
 async function StudentHome({ me, ws }: { me: NonNullable<Awaited<ReturnType<typeof studentByUser>>>; ws: Awaited<ReturnType<typeof getWorkspace>> }) {
-  const [lessons, bal] = await Promise.all([studentLessons(me.id), balanceOf(me.id)]);
+  const [lessons, bal, [extra]] = await Promise.all([studentLessons(me.id), balanceOf(me.id),
+    sql<{ hw: number; nextDue: Date | null; cards: number }[]>`SELECT
+      (SELECT count(*)::int FROM homework WHERE student_id = ${me.id} AND (answered_at IS NULL OR grade = 'На доработку')) AS hw,
+      (SELECT min(due) FROM homework WHERE student_id = ${me.id} AND answered_at IS NULL AND due IS NOT NULL) AS next_due,
+      (SELECT count(*)::int FROM cards c JOIN decks d ON d.id = c.deck_id WHERE d.student_id = ${me.id} AND c.due <= now()) AS cards`]);
   const next = upcoming(lessons);
   const n = next[0];
   const call = n ? callInfo(ws, me, n) : null;
@@ -62,9 +66,11 @@ async function StudentHome({ me, ws }: { me: NonNullable<Awaited<ReturnType<type
         <div className="empty"><strong>Занятий пока нет в расписании</strong>{me.format === 'one' ? <Link href="/app/lessons">Выбрать свободное время →</Link> : 'Преподаватель скоро составит расписание.'}</div>
       )}
       {me.message ? <div className="note"><div className="label" style={{ marginBottom: 4 }}>От преподавателя</div><p className="pre">{me.message}</p></div> : null}
-      <div className="grid">
+      <div className="grid tiles">
         <div className="panel"><div className="label">Оплачено занятий</div><div className="big" style={{ marginTop: 4, color: bal.left < 0 ? 'var(--danger)' : undefined }}>{bal.left}</div><div className="small muted">{bal.left < 0 ? 'нужно доплатить' : bal.left === 0 ? 'пора оплатить следующие' : 'осталось'} · <Link href="/app/pay">оплата</Link></div></div>
         <div className="panel"><div className="label">Стоимость</div><div className="big" style={{ marginTop: 4 }}>{me.price ? rub(me.price) : '—'}</div><div className="small muted">{me.price ? `за ${me.priceLessons} ${plural(me.priceLessons, 'занятие', 'занятия', 'занятий')}${me.priceNote ? ' · ' + me.priceNote : ''}` : 'преподаватель ещё не указал'}</div></div>
+        <Link href="/app/homework" className="panel" style={{ textDecoration: 'none', color: 'inherit' }}><div className="label">Задания</div><div className="big" style={{ marginTop: 4 }}>{extra.hw}</div><div className="small muted">{extra.hw ? (extra.nextDue ? `ближайший срок ${fmtDay(extra.nextDue)}` : 'ждут ответа') : 'всё сдано'}</div></Link>
+        <Link href="/app/cards" className="panel" style={{ textDecoration: 'none', color: 'inherit' }}><div className="label">Карточки</div><div className="big" style={{ marginTop: 4 }}>{extra.cards}</div><div className="small muted">{extra.cards ? 'пора повторить' : 'на сегодня всё'}</div></Link>
         <div className="panel"><div className="label">Впереди</div><div className="big" style={{ marginTop: 4 }}>{next.length}</div><div className="small muted">{plural(next.length, 'занятие', 'занятия', 'занятий')} в расписании</div></div>
       </div>
     </div>

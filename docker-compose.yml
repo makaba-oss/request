@@ -22,6 +22,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://request:${DB_PASSWORD}@db:5432/request
+      UPLOAD_DIR: /srv/request/uploads
+    volumes:
+      - uploads:/srv/request/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -48,6 +51,7 @@ services:
       PGPASSWORD: ${DB_PASSWORD}
     volumes:
       - ./backups:/backups
+      - uploads:/uploads:ro
     depends_on:
       db:
         condition: service_healthy
@@ -55,11 +59,14 @@ services:
       sh -c 'while true; do
         f=/backups/request-$$(date +%F).sql.gz;
         pg_dump -h db -U request request | gzip > $$f && echo "Копия базы: $$f";
+        tar -czf /backups/files-$$(date +%F).tar.gz -C /uploads . 2>/dev/null && echo "Копия файлов библиотеки";
         find /backups -name "request-*.sql.gz" -mtime +14 -delete;
+        find /backups -name "files-*.tar.gz" -mtime +3 -delete;
         sleep 86400;
       done'
 
 volumes:
+  uploads:
   pgdata:
   caddy_data:
   caddy_config:

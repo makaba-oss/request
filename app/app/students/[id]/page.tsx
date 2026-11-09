@@ -8,9 +8,12 @@ import { saveStudent, setArchived, resetPassword } from '../../actions';
 import { sql } from '@/lib/db';
 import { studentLessons, upcoming, balanceOf, LESSON_STATUS } from '@/lib/schedule';
 import { fmtDay, fmtWhen, timeEnd, todayMsk, rub, plural } from '@/lib/dates';
+import { OwnerHomeworkView, type HwRow } from '@/components/Homework';
+import { hwStatus } from '@/lib/files';
+import { ivlLabel } from '@/lib/srs';
 import { addLessons, addPayment, deletePayment, setLessonStatus, decidePayNotice } from '../../schedule-actions';
 
-const TABS = [['profile', 'Профиль'], ['lessons', 'Занятия и оплаты']] as const;
+const TABS = [['profile', 'Профиль'], ['lessons', 'Занятия и оплаты'], ['homework', 'Задания'], ['progress', 'Прогресс']] as const;
 
 export const metadata = { title: 'Ученик' };
 
@@ -33,7 +36,9 @@ export default async function StudentPage({ params, searchParams }: { params: { 
         {TABS.map(([k, l]) => <Link key={k} href={`/app/students/${s.id}?tab=${k}`} className="tab" aria-current={tab === k ? 'page' : undefined}>{l}</Link>)}
       </nav>
 
-      {tab === 'lessons' ? <LessonsTab studentId={s.id} price={s.price} priceLessons={s.priceLessons} active={s.status === 'active'} /> : <>
+      {tab === 'homework' ? <HomeworkTab id={s.id} name={fio(s)} /> : null}
+      {tab === 'progress' ? <ProgressTab id={s.id} /> : null}
+      {tab === 'lessons' ? <LessonsTab studentId={s.id} price={s.price} priceLessons={s.priceLessons} active={s.status === 'active'} /> : tab === 'profile' ? <>
       <section className="panel stack">
         <div className="row between"><h3>Доступ</h3><span className="small muted">Логин: <strong className="cred" style={{ color: 'var(--ink)' }}>{s.email}</strong></span></div>
         <ActionForm action={resetPassword} submit="Выдать новый пароль" pending="…" submitClass="btn sm"><input type="hidden" name="userId" value={s.userId} /><p className="small muted">Старый пароль перестанет работать, ученика выкинет из кабинета на всех устройствах.</p></ActionForm>
@@ -90,7 +95,7 @@ export default async function StudentPage({ params, searchParams }: { params: { 
           <label className="field"><span>Видите только вы</span><textarea name="privateNote" rows={3} defaultValue={s.privateNote} /></label>
         </section>
       </ActionForm>
-      </>}
+      </> : null}
     </div>
   );
 }
@@ -183,6 +188,47 @@ async function LessonsTab({ studentId, price, priceLessons, active }: { studentI
           ))}</tbody>
         </table></div> : <p className="muted">Оплат пока нет.</p>}
       </section>
+    </div>
+  );
+}
+
+async function HomeworkTab({ id, name }: { id: string; name: string }) {
+  const list = await sql<HwRow[]>`SELECT * FROM homework WHERE student_id = ${id} ORDER BY created_at DESC`;
+  const today = todayMsk();
+  return <OwnerHomeworkView fixedStudent={id} active={[{ id, name }]} today={today}
+    toCheck={list.filter(h => hwStatus(h, today) === 'sent')}
+    waiting={list.filter(h => ['new', 'late', 'redo'].includes(hwStatus(h, today)))}
+    done={list.filter(h => hwStatus(h, today) === 'checked')} />;
+}
+
+async function ProgressTab({ id }: { id: string }) {
+  const [decks, kana, hw] = await Promise.all([
+    sql<{ id: string; title: string; total: number; fresh: number; learned: number; due: number; lastIvl: number }[]>`
+      SELECT d.id, d.title, count(c.id)::int AS total, count(c.id) FILTER (WHERE c.due IS NULL)::int AS fresh,
+        count(c.id) FILTER (WHERE c.ivl >= 21)::int AS learned, count(c.id) FILTER (WHERE c.due <= now())::int AS due
+      FROM decks d LEFT JOIN cards c ON c.deck_id = d.id WHERE d.student_id = ${id} GROUP BY d.id ORDER BY d.created_at`,
+    sql<{ rightCount: number; wrongCount: number; bestStreak: number; weak: Record<string, number>; updatedAt: Date }[]>`SELECT * FROM kana_progress WHERE student_id = ${id}`,
+    sql<{ grade: string | null; reviewedAt: Date | null; answeredAt: Date | null }[]>`SELECT grade, reviewed_at, answered_at FROM homework WHERE student_id = ${id}`,
+  ]);
+  const k = kana[0];
+  const weak = k ? Object.entries(k.weak).sort((a, b) => b[1] - a[1]).slice(0, 16) : [];
+  const grades = hw.filter(h => h.grade && /^[2-5]$/.test(h.grade)).map(h => Number(h.grade));
+  const avg = grades.length ? (grades.reduce((a, b) => a + b, 0) / grades.length).toFixed(1).replace('.', ',') : '—';
+  return (
+    <div className="stack">
+      <div className="grid">
+        <div className="panel"><div className="label">Заданий сдано</div><div className="big" style={{ marginTop: 4 }}>{hw.filter(h => h.answeredAt).length}<span className="muted" style={{ fontSize: '1rem' }}> / {hw.length}</span></div><div className="small muted">средняя оценка {avg}</div></div>
+        <div className="panel"><div className="label">Карточек выучено</div><div className="big" style={{ marginTop: 4 }}>{decks.reduce((a, d) => a + d.learned, 0)}</div><div className="small muted">из {decks.reduce((a, d) => a + d.total, 0)} · интервал от {ivlLabel(21)}</div></div>
+        <div className="panel"><div className="label">Кана</div><div className="big" style={{ marginTop: 4 }}>{k ? Math.round((k.rightCount / Math.max(1, k.rightCount + k.wrongCount)) * 100) + '%' : '—'}</div><div className="small muted">{k ? `верно ${k.rightCount} из ${k.rightCount + k.wrongCount} · рекорд ${k.bestStreak}` : 'ещё не занимался'}</div></div>
+      </div>
+      <section className="panel stack">
+        <h3>Колоды карточек</h3>
+        {decks.length ? <div className="tbl-wrap"><table>
+          <thead><tr><th>Колода</th><th>Всего</th><th>Новых</th><th>Выучено</th><th>Ждут повторения</th></tr></thead>
+          <tbody>{decks.map(d => <tr key={d.id}><td>{d.title}</td><td className="num">{d.total}</td><td className="num">{d.fresh}</td><td className="num">{d.learned}</td><td className="num">{d.due ? <span className="chip c-warn">{d.due}</span> : 0}</td></tr>)}</tbody>
+        </table></div> : <p className="muted">Ученик ещё не завёл колоды.</p>}
+      </section>
+      {weak.length ? <section className="panel stack"><h3>Трудные знаки каны</h3><div className="weak">{weak.map(([c, n]) => <span key={c} lang="ja">{c}<small>×{n}</small></span>)}</div>{k ? <p className="small muted">Последняя тренировка: {fmtWhen(k.updatedAt)}</p> : null}</section> : null}
     </div>
   );
 }
